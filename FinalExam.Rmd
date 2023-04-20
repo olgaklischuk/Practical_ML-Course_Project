@@ -1,0 +1,311 @@
+---
+title: Weight Lifting Case
+Author: Olha Klishchuk
+output: html_document
+---
+
+# Weight Lifting Correctness Assessment Case
+
+The goal of this project is to predict the manner in which athletes did the exercise. This is the "classe" variable in the training set. Also coordinates obtained from accelerometers on the belt, forearm, arm, and dumbell have been used to predict quality of doing bicep curl. I have created a report describing model details on how I have used cross validation, what was the expected out of sample error is, and why I chose the random forest as a prediction instrument. I have also use my prediction model to predict 20 different test cases. 
+
+```{r}
+library('lattice')
+library('ggplot2')
+suppressWarnings(suppressMessages(library('dplyr', quiet = T)))
+library('caret', quiet = T)
+library('splines')
+library('parallel')
+suppressWarnings(suppressMessages(library('survival', quiet = T)))
+suppressWarnings(suppressMessages(library('randomForest', quiet = T)))
+suppressWarnings(suppressMessages(library('gbm', quiet = T)))
+suppressWarnings(suppressMessages(library('rattle', quiet = T)))
+```
+
+```{r}
+suppressWarnings(
+    suppressMessages(
+    training <- readr::read_csv('pml-training.csv')))
+
+suppressWarnings(
+    suppressMessages(
+    testing <- readr::read_csv('pml-testing.csv')))
+```
+
+```{r}
+str(training)
+```
+
+```{r}
+head(testing)
+```
+
+```{r}
+# Count the number of missing values in each row
+row_na_count <- lapply(training, FUN = function(x) length(which(is.na(x))))
+```
+
+```{r}
+data.frame(number_of_ommisions=t(data.frame(row_na_count)[-1]))
+```
+
+```{r}
+training$classe <- as.factor(training$classe)
+```
+
+```{r}
+str(training$classe)
+```
+
+```{r}
+names(training)[names(testing) != names(training)]
+```
+
+```{r}
+names(testing)[names(testing) != names(training)]
+```
+
+For feature extraction we only use the variables which are related to the raw measurements from the sensors located on the belt, forearm, arm, and dumbell for the physical movement during the exercise. The sensor data can be represented in variables related to the Euler angles (roll, pitch, and yaw) and accelerometer, gyroscope, and magnetometer readings for each of the 4 sensor locations. These variables appear with the following name patterns in the dataset.
+
+## Predictors Data Set
+
+```{r}
+predictorIdx <- c(grep("^accel", names(training)), 
+                  grep("^gyros", names(training)), 
+                  grep("^magnet", names(training)), 
+                  grep("^roll", names(training)), 
+                  grep("^pitch", names(training)), 
+                  grep("^yaw", names(training)), 
+                  grep("^total", names(training)))
+trainPredSet <- training[, c(predictorIdx, 160)]
+testPredSet <- testing[, c(predictorIdx, 160)]
+```
+
+```{r}
+names(testPredSet)
+```
+
+```{r}
+head(trainPredSet); head(testPredSet)
+```
+
+```{r}
+#Check on ommited data
+sum(is.na(trainPredSet));sum(is.na(testPredSet))
+```
+
+```{r}
+nearZeroVar(trainPredSet, saveMetric = T)
+```
+
+# Training Model
+
+In order to evaluate our prediction algorithm cross-validation is used. 
+
+```{r}
+set.seed(3335) 
+inTrain <- createDataPartition(y = trainPredSet[['classe']], p =.8, list = F)
+Train <- trainPredSet[inTrain,]
+Test <- trainPredSet[-inTrain,]
+```
+
+```{r}
+head(Train)
+```
+
+```{r}
+ctrl <- trainControl(method = 'repeatedcv', number = 5, repeats = 5)
+ctrl
+```
+
+```{r}
+set.seed(3335)
+suppressWarnings(suppressMessages(library(MASS, quiet = T)))
+modQdaFit <- train(classe~. , data = Train, method = 'qda', preProcess = c('center', 'scale'), 
+               trControl = ctrl)
+```
+
+```{r}
+modQdaFit$results
+```
+
+```{r}
+predictQda<-predict(modQdaFit, Test)
+predictQda<-data.frame(class = predictQda)
+```
+
+```{r}
+# Random Forest
+set.seed(3335)
+#Cross validation set
+cvset <- createDataPartition(trainPredSet$classe, p=.8, list = F)
+cvTrain <- trainPredSet[cvset,] 
+cvTest <- trainPredSet[-cvset,]
+```
+
+```{r}
+inTrainRF <- createDataPartition(cvTrain$classe, p = .7, list = F)
+
+train <- cvTrain[inTrainRF,]
+test <- cvTrain[-inTrainRF,]
+```
+
+```{r}
+modRfFit <- randomForest(classe~., data = train)
+```
+
+```{r}
+# ntree
+modRfFit$ntree
+```
+
+```{r}
+#err. rate
+modRfFit$err.rate
+```
+
+```{r}
+#Confusion
+modRfFit$confusion
+```
+
+```{r}
+modRfFit$forest$ncat
+```
+
+```{r}
+suppressWarnings(suppressMessages(library(rpart, quiet = T)))
+suppressWarnings(
+    fancyRpartPlot(train(classe~., train, method = 'rpart')$finalModel, sub = paste(format(Sys.Date(), "%Y %B %d| %X:%Z"),"\nAuthor: Olha Klishchuk")))
+```
+
+```{r}
+modRfFit2 <- randomForest(classe~., data = Train)
+```
+
+```{r}
+predictTest<-predict(modRfFit, test)
+```
+
+```{r}
+equality <- as.character(predictTest) == as.character(test$classe)
+
+cat(paste(round(sum(equality, na.rm = T)/length(predictTest)*100, 2), "%"))
+
+predictTest <- data.frame(class = predictTest)
+```
+
+```{r}
+predictTest2 <- predict(modRfFit2, Test)
+
+equality2 <- as.character(predictTest2) == as.character(Test$classe)
+
+cat(paste(round(sum(equality2, na.rm = T)/length(predictTest2)*100, 1), "%"))
+
+predictTest2 <- data.frame(class = predictTest2)
+```
+
+#### Now lets estimate for test sample
+
+```{r}
+# Validation sample
+predictCV<-predict(modRfFit, cvTest)
+predictCV<-data.frame(class = predictCV)
+```
+
+# Out-of-sample Error
+
+### Quadratic Discriminant model
+
+```{r}
+predictQda[,'sensitivity'] = ifelse(predictQda[,1] == Test$classe, TRUE, FALSE)
+round(prop.table(table(predictQda[['class']], predictQda[['sensitivity']]), margin = 1)*100, 2)
+```
+
+### Random Forest
+
+```{r}
+# Prediction on the testing sample
+predictTest[,'accuracy'] = ifelse(predictTest[,'class'] == test$classe, TRUE, FALSE)
+head(predictTest, 20)
+```
+
+```{r}
+accuracy_levels<-prop.table(table(predictTest$class,predictTest$accuracy), margin = 1)*100
+round(accuracy_levels, 2)
+```
+
+```{r}
+# Cross validation sample
+predictCV<-data.frame(class = predictCV)
+predictCV[,'accuracy'] = ifelse(predictCV[,1] == cvTest$classe, TRUE, FALSE)
+head(predictCV)
+```
+
+```{r}
+table(predictCV$class,predictCV$accuracy)
+```
+
+```{r}
+accuracy_level<-prop.table(table(predictCV$class,predictCV$accuracy), margin = 1)*100
+
+round(accuracy_level, 2)
+```
+
+```{r}
+# Test sample
+predictTest2[,'accuracy'] = ifelse(predictTest2$class == Test$classe, TRUE, FALSE)
+head(predictTest2, 20)
+```
+
+```{r}
+round(prop.table(table(predictTest2$class, predictTest2$accuracy), margin = 1)*100, 2)
+```
+
+```{r}
+# confusion Matrix
+# QDA model
+confusionMatrix(predictQda$class, Test$classe)
+```
+
+```{r}
+#RF
+# test set
+confusionMatrix(predictTest$class, test$classe)
+```
+
+```{r}
+# validation set
+confusionMatrix(predictCV$class, cvTest$classe)
+```
+
+```{r}
+# test sample from pml-testing.csv
+confusionMatrix(predictTest2$class, Test$classe)
+```
+
+We can see that RF model is outperform QDA model. Therefore, we will employ it for forecasting 20 cases.
+
+# Prediction
+
+```{r}
+testPredict <- predict(modRfFit2, newdata = testPredSet)
+
+# testPredict[1:20,'classe']
+```
+
+```{r}
+data.frame(question = 1:20, class = as.character(testPredict[1:20]))
+```
+
+```{r}
+testPredict<- predict(modQdaFit, newdata = testPredSet)
+data.frame(question = 1:20, class = as.character(testPredict[1:20]))
+```
+
+# Summary
+
+> Therefore we can conclude:
+
+  > * random forest demonstrates more classification accuracy (around 99%) in predicting model than linear model;
+  > * if you perform exercise without swinging (roll_belt < 131, pitch_forearm < -34, magnet_dumbbel_y < 437) you will with 100% of probability correctly and safely perform the exercise.
+
