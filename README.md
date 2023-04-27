@@ -1,1 +1,2 @@
-# Practical_ML-Course_Project
+# Practical Machine learning
+# Course Project
